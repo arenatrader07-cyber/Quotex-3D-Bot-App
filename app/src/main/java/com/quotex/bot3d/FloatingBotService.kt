@@ -253,10 +253,10 @@ class FloatingBotService : Service() {
 
     private fun captureAndSendScreen() {
         val image = imageReader?.acquireLatestImage() ?: return
-        val planes = image.planes
-        val buffer = planes[0].buffer
-        val pixelStride = planes[0].pixelStride
-        val rowStride = planes[0].rowStride
+        val plane = image.planes.first()
+        val buffer = plane.buffer
+        val pixelStride = plane.pixelStride
+        val rowStride = plane.rowStride
         val rowPadding = rowStride - pixelStride * image.width
 
         val bitmap = Bitmap.createBitmap(

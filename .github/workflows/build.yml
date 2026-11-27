@@ -1,27 +1,139 @@
-name: Build APK
-on: [push]
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.2'
-      - name: Setup & Build
-        run: |
-          mkdir -p app/src/main/java/com/quotex/bot3d
-          printf "pluginManagement{repositories{google();mavenCentral();gradlePluginPortal()}}\ndependencyResolutionManagement{repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS);repositories{google();mavenCentral()}}\nrootProject.name='Quotex3DBot'\ninclude ':app'" > settings.gradle
-          printf "plugins{id 'com.android.application' version '8.1.4' apply false;id 'org.jetbrains.kotlin.android' version '1.9.0' apply false}" > build.gradle
-          printf "android.useAndroidX=true\nandroid.enableJetifier=true" > gradle.properties
-          printf "plugins{id 'com.android.application';id 'org.jetbrains.kotlin.android'}\nandroid{namespace 'com.quotex.bot3d';compileSdk 34;defaultConfig{applicationId 'com.quotex.bot3d';minSdk 26;targetSdk 34;versionCode 1;versionName '1.0'};compileOptions{sourceCompatibility JavaVersion.VERSION_17;targetCompatibility JavaVersion.VERSION_17};kotlinOptions{jvmTarget='17'}}\ndependencies{implementation 'androidx.core:core-ktx:1.12.0';implementation 'androidx.appcompat:appcompat:1.6.1';implementation 'com.squareup.okhttp3:okhttp:4.12.0'}" > app/build.gradle
-          gradle assembleDebug
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Quotex-3D-Bot
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+package com.quotex.bot3d
+
+import android.app.*
+import android.content.*
+import android.graphics.*
+import android.graphics.drawable.GradientDrawable
+import android.hardware.display.*
+import android.media.ImageReader
+import android.media.projection.*
+import android.os.*
+import android.view.*
+import android.widget.*
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.io.*
+
+class FloatingBotService : Service() {
+    private lateinit var wm: WindowManager
+    private lateinit var box: LinearLayout
+    private lateinit var btn: TextView
+    private lateinit var card: LinearLayout
+    private lateinit var tvSig: TextView
+    private lateinit var tvAcc: TextView
+    private lateinit var tvMtg: TextView
+
+    private var isOn = false
+    private val url = "https://onrender.com"
+    private val client = OkHttpClient()
+    private val handler = Handler(Looper.getMainLooper())
+    private var mp: MediaProjection? = null
+    private var vd: VirtualDisplay? = null
+    private var ir: ImageReader? = null
+
+    override fun onBind(i: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val ch = NotificationChannel("BOT", "Bot", NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+        val n = Notification.Builder(this, "BOT").setContentTitle("Quotex 3D Bot").setSmallIcon(android.R.drawable.ic_dialog_info).build()
+        startForeground(1, n)
+
+        val code = intent?.getIntExtra("RESULT_CODE", -1) ?: -1
+        val data: Intent? = intent?.getParcelableExtra("DATA")
+        if (code != -1 && data != null) {
+            mp = (getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager).getMediaProjection(code, data)
+            val m = resources.displayMetrics
+            ir = ImageReader.newInstance(m.widthPixels / 2, m.heightPixels / 2, PixelFormat.RGBA_8888, 2)
+            vd = mp?.createVirtualDisplay("QX", m.widthPixels / 2, m.heightPixels / 2, m.densityDpi, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, ir?.surface, null, null)
+        }
+        setupUI()
+        return START_STICKY
+    }
+
+    private fun setupUI() {
+        wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        box = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val bg = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.parseColor("#EF4444")); setStroke(5, Color.WHITE) }
+        btn = TextView(this).apply { text = "OFF"; textSize = 14f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); gravity = Gravity.CENTER; background = bg; layoutParams = LinearLayout.LayoutParams(140, 140) }
+
+        val cBg = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = 24f; setColor(Color.parseColor("#0F172A")); setStroke(5, Color.parseColor("#38BDF8")) }
+        card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; background = cBg; elevation = 30f; setPadding(30, 20, 30, 20); visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(-2, -2).apply { setMargins(16, 0, 0, 0) }
+        }
+        tvSig = TextView(this).apply { text = "SCANNING..."; textSize = 18f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor("#38BDF8")); gravity = Gravity.CENTER }
+        tvAcc = TextView(this).apply { text = "Win: --%"; textSize = 13f; setTextColor(Color.WHITE); gravity = Gravity.CENTER }
+        tvMtg = TextView(this).apply { text = "1-STEP MTG"; textSize = 11f; setTextColor(Color.parseColor("#FACC15")); gravity = Gravity.CENTER }
+
+        card.addView(tvSig); card.addView(tvAcc); card.addView(tvMtg)
+        box.addView(btn); box.addView(card)
+
+        val p = WindowManager.LayoutParams(-2, -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.START; x = 50; y = 300 }
+        wm.addView(box, p)
+
+        btn.setOnTouchListener(object : View.OnTouchListener {
+            var ix = 0; var iy = 0; var tx = 0f; var ty = 0f
+            override fun onTouch(v: View, e: MotionEvent): Boolean {
+                when (e.action) {
+                    MotionEvent.ACTION_DOWN -> { ix = p.x; iy = p.y; tx = e.rawX; ty = e.rawY; return true }
+                    MotionEvent.ACTION_MOVE -> { p.x = ix + (e.rawX - tx).toInt(); p.y = iy + (e.rawY - ty).toInt(); wm.updateViewLayout(box, p); return true }
+                    MotionEvent.ACTION_UP -> { if (Math.abs(e.rawX - tx) < 15 && Math.abs(e.rawY - ty) < 15) toggle(); return true }
+                }
+                return false
+            }
+        })
+    }
+
+    private fun toggle() {
+        isOn = !isOn
+        val bg = btn.background as GradientDrawable
+        if (isOn) {
+            bg.setColor(Color.parseColor("#10B981")); btn.text = "ON"; card.visibility = View.VISIBLE
+            client.newCall(Request.Builder().url("$url/toggle").post("".toRequestBody()).build()).enqueue(object : Callback { override fun onFailure(c: Call, e: IOException) {}; override fun onResponse(c: Call, r: Response) { r.close() } })
+            loop()
+        } else {
+            bg.setColor(Color.parseColor("#EF4444")); btn.text = "OFF"; card.visibility = View.GONE
+            client.newCall(Request.Builder().url("$url/toggle").post("".toRequestBody()).build()).enqueue(object : Callback { override fun onFailure(c: Call, e: IOException) {}; override fun onResponse(c: Call, r: Response) { r.close() } })
+            handler.removeCallbacksAndMessages(null)
+        }
+    }
+
+    private fun loop() {
+        handler.postDelayed(object : Runnable {
+            override fun run() { if (isOn) { scan(); handler.postDelayed(this, 2000) } }
+        }, 1000)
+    }
+
+    private fun scan() {
+        val img = ir?.acquireLatestImage() ?: return
+        val pl = img.planes.first()
+        val bmp = Bitmap.createBitmap(img.width + (pl.rowStride - pl.pixelStride * img.width) / pl.pixelStride, img.height, Bitmap.Config.ARGB_8888)
+        bmp.copyPixelsFromBuffer(pl.buffer); img.close()
+        val out = ByteArrayOutputStream(); bmp.compress(Bitmap.CompressFormat.JPEG, 70, out)
+        val body = MultipartBody.Builder().setType(MultipartBody.FORM).addFormDataPart("file", "s.jpg", out.toByteArray().toRequestBody("image/jpeg".toMediaTypeOrNull())).build()
+        client.newCall(Request.Builder().url("$url/analyze").post(body).build()).enqueue(object : Callback {
+            override fun onFailure(c: Call, e: IOException) {}
+            override fun onResponse(c: Call, r: Response) {
+                val s = r.body?.string() ?: return
+                try {
+                    val j = JSONObject(s)
+                    val sig = j.optString("signal", "WAIT"); val acc = j.optInt("accuracy", 0); val mtg = j.optString("mtg", "1-STEP MTG")
+                    handler.post {
+                        val cBg = card.background as GradientDrawable
+                        when (sig) {
+                            "UP" -> { tvSig.text = "▲ UP"; tvSig.setTextColor(Color.parseColor("#10B981")); tvAcc.text = "Win: $acc%"; tvMtg.text = mtg; cBg.setStroke(6, Color.parseColor("#10B981")) }
+                            "DOWN" -> { tvSig.text = "▼ DOWN"; tvSig.setTextColor(Color.parseColor("#EF4444")); tvAcc.text = "Win: $acc%"; tvMtg.text = mtg; cBg.setStroke(6, Color.parseColor("#EF4444")) }
+                            "ABORT" -> { tvSig.text = "⚠ ABORT"; tvSig.setTextColor(Color.parseColor("#F59E0B")); tvAcc.text = "High Risk"; tvMtg.text = "NO TRADE"; cBg.setStroke(6, Color.parseColor("#F59E0B")) }
+                            else -> { tvSig.text = "SCANNING..."; tvSig.setTextColor(Color.parseColor("#38BDF8")); tvAcc.text = "Reading..."; tvMtg.text = "1-STEP MTG"; cBg.setStroke(5, Color.parseColor("#38BDF8")) }
+                        }
+                    }
+                } catch (e: Exception) {}
+            }
+        })
+    }
+
+    override fun onDestroy() { super.onDestroy(); if (::box.isInitialized) wm.removeView(box); mp?.stop() }
+}

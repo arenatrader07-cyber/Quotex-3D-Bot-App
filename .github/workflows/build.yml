@@ -1,239 +1,27 @@
-name: Build Quotex Bot APK
-
-on:
-  push:
-    branches: [ "main" ]
-  workflow_dispatch:
-
+name: Build APK
+on: [push]
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.2'
-      - name: Create Clean Android Project
+      - name: Setup & Build
         run: |
-          rm -rf app settings.gradle build.gradle gradle.properties
           mkdir -p app/src/main/java/com/quotex/bot3d
-
-          cat << 'EOF' > settings.gradle
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          rootProject.name = "Quotex3DBot"
-          include ':app'
-          EOF
-
-          cat << 'EOF' > build.gradle
-          plugins {
-              id 'com.android.application' version '8.1.4' apply false
-              id 'org.jetbrains.kotlin.android' version '1.9.0' apply false
-          }
-          EOF
-
-          cat << 'EOF' > gradle.properties
-          android.useAndroidX=true
-          android.enableJetifier=true
-          EOF
-
-          cat << 'EOF' > app/build.gradle
-          plugins {
-              id 'com.android.application'
-              id 'org.jetbrains.kotlin.android'
-          }
-          android {
-              namespace 'com.quotex.bot3d'
-              compileSdk 34
-              defaultConfig {
-                  applicationId "com.quotex.bot3d"
-                  minSdk 26
-                  targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
-              }
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-              kotlinOptions {
-                  jvmTarget = '17'
-              }
-          }
-          dependencies {
-              implementation 'androidx.core:core-ktx:1.12.0'
-              implementation 'androidx.appcompat:appcompat:1.6.1'
-              implementation 'com.google.android.material:material:1.11.0'
-              implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-          }
-          EOF
-
-          python3 -c '
-          ns = "http" + "://://android.com"
-          manifest = f"""<?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="{ns}">
-              <uses-permission android:name="android.permission.INTERNET" />
-              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
-              <application
-                  android:allowBackup="true"
-                  android:label="Quotex 3D Bot"
-                  android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
-                  <activity android:name="com.quotex.bot3d.MainActivity" android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-                  <service
-                      android:name="com.quotex.bot3d.FloatingBotService"
-                      android:enabled="true"
-                      android:exported="false"
-                      android:foregroundServiceType="mediaProjection" />
-              </application>
-          </manifest>"""
-          open("app/src/main/AndroidManifest.xml", "w").write(manifest)
-          '
-
-          cat << 'EOF' > app/src/main/java/com/quotex/bot3d/MainActivity.kt
-          package com.quotex.bot3d
-
-          import android.app.Activity
-          import android.content.Context
-          import android.content.Intent
-          import android.media.projection.MediaProjectionManager
-          import android.net.Uri
-          import android.os.Bundle
-          import android.provider.Settings
-          import android.widget.Button
-          import android.widget.LinearLayout
-          import android.widget.TextView
-          import android.widget.Toast
-          import androidx.appcompat.app.AppCompatActivity
-
-          class MainActivity : AppCompatActivity() {
-              private val OVERLAY_REQ_CODE = 101
-              private val SCREEN_CAPTURE_REQ_CODE = 102
-              private lateinit var projectionManager: MediaProjectionManager
-
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-                  projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-
-                  val layout = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      setPadding(50, 100, 50, 50)
-                      setBackgroundColor(android.graphics.Color.parseColor("#0F172A"))
-                  }
-                  val title = TextView(this).apply {
-                      text = "QUOTEX 3D AI BOT"
-                      textSize = 24f
-                      setTextColor(android.graphics.Color.WHITE)
-                      setPadding(0, 0, 0, 40)
-                  }
-                  val startBtn = Button(this).apply {
-                      text = "LAUNCH FLOATING 3D BOT"
-                      setBackgroundColor(android.graphics.Color.parseColor("#10B981"))
-                      setTextColor(android.graphics.Color.WHITE)
-                      setOnClickListener { checkPermissionsAndStart() }
-                  }
-                  layout.addView(title)
-                  layout.addView(startBtn)
-                  setContentView(layout)
-              }
-
-              private fun checkPermissionsAndStart() {
-                  if (!Settings.canDrawOverlays(this)) {
-                      val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-                      startActivityForResult(intent, OVERLAY_REQ_CODE)
-                  } else {
-                      startActivityForResult(projectionManager.createScreenCaptureIntent(), SCREEN_CAPTURE_REQ_CODE)
-                  }
-              }
-
-              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-                  super.onActivityResult(requestCode, resultCode, data)
-                  if (requestCode == OVERLAY_REQ_CODE) {
-                      if (Settings.canDrawOverlays(this)) {
-                          startActivityForResult(projectionManager.createScreenCaptureIntent(), SCREEN_CAPTURE_REQ_CODE)
-                      } else {
-                          Toast.makeText(this, "Overlay Permission Required!", Toast.LENGTH_SHORT).show()
-                      }
-                  } else if (requestCode == SCREEN_CAPTURE_REQ_CODE && resultCode == Activity.RESULT_OK && data != null) {
-                      val serviceIntent = Intent(this, FloatingBotService::class.java).apply {
-                          putExtra("RESULT_CODE", resultCode)
-                          putExtra("DATA", data)
-                      }
-                      startForegroundService(serviceIntent)
-                      moveTaskToBack(true)
-                  }
-              }
-          }
-          EOF
-
-          cat << 'EOF' > app/src/main/java/com/quotex/bot3d/FloatingBotService.kt
-          package com.quotex.bot3d
-
-          import android.app.Notification
-          import android.app.NotificationChannel
-          import android.app.NotificationManager
-          import android.app.Service
-          import android.content.Context
-          import android.content.Intent
-          import android.graphics.Bitmap
-          import android.graphics.Color
-          import android.graphics.PixelFormat
-          import android.graphics.Typeface
-          import android.graphics.drawable.GradientDrawable
-          import android.hardware.display.DisplayManager
-          import android.hardware.display.VirtualDisplay
-          import android.media.ImageReader
-          import android.media.projection.MediaProjection
-          import android.media.projection.MediaProjectionManager
-          import android.os.Handler
-          import android.os.IBinder
-          import android.os.Looper
-          import android.view.Gravity
-          import android.view.MotionEvent
-          import android.view.View
-          import android.view.WindowManager
-          import android.widget.LinearLayout
-          import android.widget.TextView
-          import okhttp3.*
-          import okhttp3.MediaType.Companion.toMediaTypeOrNull
-          import okhttp3.RequestBody.Companion.toRequestBody
-          import org.json.JSONObject
-          import java.io.ByteArrayOutputStream
-          import java.io.IOException
-
-          class FloatingBotService : Service() {
-              private lateinit var windowManager: WindowManager
-              private lateinit var containerLayout: LinearLayout
-              private lateinit var roundBubbleBtn: TextView
-              private lateinit var card3D: LinearLayout
-              private lateinit var tvSignal: TextView
-              private lateinit var tvAccuracy: TextView
-              private lateinit var tvMtg: TextView
-
-              private var isBotOn = false
-              private val serverUrl = "https://onrender.com"
-              private val client = OkHttpClient()
+          printf "pluginManagement{repositories{google();mavenCentral();gradlePluginPortal()}}\ndependencyResolutionManagement{repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS);repositories{google();mavenCentral()}}\nrootProject.name='Quotex3DBot'\ninclude ':app'" > settings.gradle
+          printf "plugins{id 'com.android.application' version '8.1.4' apply false;id 'org.jetbrains.kotlin.android' version '1.9.0' apply false}" > build.gradle
+          printf "android.useAndroidX=true\nandroid.enableJetifier=true" > gradle.properties
+          printf "plugins{id 'com.android.application';id 'org.jetbrains.kotlin.android'}\nandroid{namespace 'com.quotex.bot3d';compileSdk 34;defaultConfig{applicationId 'com.quotex.bot3d';minSdk 26;targetSdk 34;versionCode 1;versionName '1.0'};compileOptions{sourceCompatibility JavaVersion.VERSION_17;targetCompatibility JavaVersion.VERSION_17};kotlinOptions{jvmTarget='17'}}\ndependencies{implementation 'androidx.core:core-ktx:1.12.0';implementation 'androidx.appcompat:appcompat:1.6.1';implementation 'com.squareup.okhttp3:okhttp:4.12.0'}" > app/build.gradle
+          gradle assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Quotex-3D-Bot
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
